@@ -17,16 +17,24 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/yaml"
 
+	"github.com/fluxcd/flux2/internal/utils"
 	imagev1 "github.com/fluxcd/image-reflector-controller/api/v1alpha1"
+	"github.com/fluxcd/pkg/apis/meta"
 )
 
 var createAutoImageRepositoryCmd = &cobra.Command{
@@ -49,7 +57,9 @@ func init() {
 	flags := createAutoImageRepositoryCmd.Flags()
 	flags.StringVar(&imageRepoArgs.image, "image", "", "the image repository to scan; e.g., library/alpine")
 	flags.StringVar(&imageRepoArgs.secretRef, "secret-ref", "", "the name of a docker-registry secret to use for credentials")
-	flags.DurationVar(&imageRepoArgs.timeout, "timeout", 0, "a timeout for scanning; this defaults to the interval if not set")
+	// NB there is already a --timeout in the global flags, for
+	// controlling timeout on operations while e.g., creating objects.
+	flags.DurationVar(&imageRepoArgs.timeout, "scan-timeout", 0, "a timeout for scanning; this defaults to the interval if not set")
 
 	createAutoCmd.AddCommand(createAutoImageRepositoryCmd)
 }
@@ -93,7 +103,36 @@ func createAutoImageRepositoryRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return exportImageRepo(repo)
+	if export {
+		return exportImageRepo(repo)
+	}
+
+	// I don't need these until attempting to upsert the object, but
+	// for consistency with other create commands, the following are
+	// given a chance to error out before reporting any progress.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	kubeClient, err := utils.KubeClient(kubeconfig, kubecontext)
+	if err != nil {
+		return err
+	}
+
+	logger.Generatef("generating ImageRepository")
+	logger.Actionf("applying ImageRepository")
+	namespacedName, err := upsertImageRepository(ctx, kubeClient, &repo)
+	if err != nil {
+		return err
+	}
+
+	logger.Waitingf("waiting for ImageRepository reconciliation")
+	if err := wait.PollImmediate(pollInterval, timeout,
+		isImageRepositoryReady(ctx, kubeClient, namespacedName, &repo)); err != nil {
+		return err
+	}
+	logger.Successf("ImageRepository reconciliation completed")
+
+	return nil
 }
 
 func exportImageRepo(repo imagev1.ImageRepository) error {
@@ -120,4 +159,56 @@ func exportImageRepo(repo imagev1.ImageRepository) error {
 	fmt.Println("---")
 	fmt.Println(resourceToString(data))
 	return nil
+}
+
+func upsertImageRepository(ctx context.Context, kubeClient client.Client, repo *imagev1.ImageRepository) (types.NamespacedName, error) {
+	nsname := types.NamespacedName{
+		Namespace: repo.GetNamespace(),
+		Name:      repo.GetName(),
+	}
+
+	var existing imagev1.ImageRepository
+	existing.SetName(nsname.Name)
+	existing.SetNamespace(nsname.Namespace)
+	op, err := controllerutil.CreateOrUpdate(ctx, kubeClient, &existing, func() error {
+		existing.Spec = repo.Spec
+		existing.Labels = repo.Labels
+		return nil
+	})
+	if err != nil {
+		return nsname, err
+	}
+
+	switch op {
+	case controllerutil.OperationResultCreated:
+		logger.Successf("ImageRepository created")
+	case controllerutil.OperationResultUpdated:
+		logger.Successf("ImageRepository updated")
+	}
+	return nsname, nil
+}
+
+func isImageRepositoryReady(ctx context.Context, kubeClient client.Client,
+	namespacedName types.NamespacedName, imageRepository *imagev1.ImageRepository) wait.ConditionFunc {
+	return func() (bool, error) {
+		err := kubeClient.Get(ctx, namespacedName, imageRepository)
+		if err != nil {
+			return false, err
+		}
+
+		// Confirm the state we are observing is for the current generation
+		if imageRepository.Generation != imageRepository.Status.ObservedGeneration {
+			return false, nil
+		}
+
+		if c := apimeta.FindStatusCondition(imageRepository.Status.Conditions, meta.ReadyCondition); c != nil {
+			switch c.Status {
+			case metav1.ConditionTrue:
+				return true, nil
+			case metav1.ConditionFalse:
+				return false, fmt.Errorf(c.Message)
+			}
+		}
+		return false, nil
+	}
 }

@@ -14,9 +14,10 @@ flux create auto imagerepository <name> [flags]
 ### Options
 
 ```
-  -h, --help                help for imagerepository
-      --image string        the image repository to scan; e.g., library/alpine
-      --secret-ref string   the name of a docker-registry secret to use for credentials
+  -h, --help                    help for imagerepository
+      --image string            the image repository to scan; e.g., library/alpine
+      --scan-timeout duration   a timeout for scanning; this defaults to the interval if not set
+      --secret-ref string       the name of a docker-registry secret to use for credentials
 ```
 
 ### Options inherited from parent commands
