@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/yaml"
 
 	"github.com/fluxcd/flux2/internal/utils"
 	imagev1 "github.com/fluxcd/image-reflector-controller/api/v1alpha1"
@@ -38,9 +37,9 @@ import (
 )
 
 var createAutoImageRepositoryCmd = &cobra.Command{
-	Use:   "imagerepository <name>",
+	Use:   "image-repository <name>",
 	Short: "Create or update an ImageRepository object",
-	Long: `The create auto imagerepository command generates an ImageRepository resource.
+	Long: `The create auto image-repository command generates an ImageRepository resource.
 An ImageRepository object specifies an image repository to scan.`,
 	RunE: createAutoImageRepositoryRun,
 }
@@ -104,7 +103,7 @@ func createAutoImageRepositoryRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if export {
-		return exportImageRepo(repo)
+		return exportImageRepo(repo) // defined with export command
 	}
 
 	// I don't need these until attempting to upsert the object, but
@@ -132,32 +131,6 @@ func createAutoImageRepositoryRun(cmd *cobra.Command, args []string) error {
 	}
 	logger.Successf("ImageRepository reconciliation completed")
 
-	return nil
-}
-
-func exportImageRepo(repo imagev1.ImageRepository) error {
-	gvk := imagev1.GroupVersion.WithKind(imagev1.ImageRepositoryKind)
-	export := imagev1.ImageRepository{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       gvk.Kind,
-			APIVersion: gvk.GroupVersion().String(),
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        repo.Name,
-			Namespace:   repo.Namespace,
-			Labels:      repo.Labels,
-			Annotations: repo.Annotations,
-		},
-		Spec: repo.Spec,
-	}
-
-	data, err := yaml.Marshal(export)
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("---")
-	fmt.Println(resourceToString(data))
 	return nil
 }
 

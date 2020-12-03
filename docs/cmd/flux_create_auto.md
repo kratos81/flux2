@@ -30,5 +30,5 @@ being available.
 ### SEE ALSO
 
 * [flux create](flux_create.md)	 - Create or update sources and resources
-* [flux create auto imagerepository](flux_create_auto_imagerepository.md)	 - Create or update an ImageRepository object
+* [flux create auto image-repository](flux_create_auto_image-repository.md)	 - Create or update an ImageRepository object
 
