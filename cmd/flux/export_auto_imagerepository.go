@@ -17,16 +17,8 @@ limitations under the License.
 package main
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
-	"github.com/fluxcd/flux2/internal/utils"
 	imagev1 "github.com/fluxcd/image-reflector-controller/api/v1alpha1"
 )
 
@@ -40,81 +32,12 @@ var exportImageRepositoryCmd = &cobra.Command{
   # Export a Provider
   flux export auto image-repository alpine > alpine.yaml
 `,
-	RunE: exportImageRepositoryCmdRun,
+	RunE: exportCommand{
+		object: &imagev1.ImageRepository{},
+		list:   &imagev1.ImageRepositoryList{},
+	}.run,
 }
 
 func init() {
 	exportAutoCmd.AddCommand(exportImageRepositoryCmd)
-}
-
-func exportImageRepositoryCmdRun(cmd *cobra.Command, args []string) error {
-	if !exportAll && len(args) < 1 {
-		return fmt.Errorf("name is required")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	kubeClient, err := utils.KubeClient(kubeconfig, kubecontext)
-	if err != nil {
-		return err
-	}
-
-	if exportAll {
-		var list imagev1.ImageRepositoryList
-		err = kubeClient.List(ctx, &list, client.InNamespace(namespace))
-		if err != nil {
-			return err
-		}
-
-		if len(list.Items) == 0 {
-			logger.Failuref("no imagerepository objects found in %s namespace", namespace)
-			return nil
-		}
-
-		for _, imageRepo := range list.Items {
-			if err := exportImageRepo(imageRepo); err != nil {
-				return err
-			}
-		}
-	} else {
-		name := args[0]
-		namespacedName := types.NamespacedName{
-			Namespace: namespace,
-			Name:      name,
-		}
-		var imageRepo imagev1.ImageRepository
-		err = kubeClient.Get(ctx, namespacedName, &imageRepo)
-		if err != nil {
-			return err
-		}
-		return exportImageRepo(imageRepo)
-	}
-	return nil
-}
-
-func exportImageRepo(repo imagev1.ImageRepository) error {
-	gvk := imagev1.GroupVersion.WithKind(imagev1.ImageRepositoryKind)
-	export := imagev1.ImageRepository{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       gvk.Kind,
-			APIVersion: gvk.GroupVersion().String(),
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        repo.Name,
-			Namespace:   repo.Namespace,
-			Labels:      repo.Labels,
-			Annotations: repo.Annotations,
-		},
-		Spec: repo.Spec,
-	}
-
-	data, err := yaml.Marshal(export)
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("---")
-	fmt.Println(resourceToString(data))
-	return nil
 }
